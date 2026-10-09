@@ -212,10 +212,12 @@ class AzureStorage(BaseStorage):
             self._user_delegation_key is None
             or expiry > self._user_delegation_key_expiry
         ):
-            now = datetime.utcnow()
-            key_expiry_time = now + timedelta(days=7)
+            # aap.1: start the key slightly in the past so a clock ahead of Azure's cannot
+            # make it "not yet valid", and keep its lifetime under the seven-day maximum.
+            key_start_time = datetime.utcnow() - timedelta(minutes=5)
+            key_expiry_time = key_start_time + timedelta(days=7, minutes=-10)
             self._user_delegation_key = self.service_client.get_user_delegation_key(
-                key_start_time=now, key_expiry_time=key_expiry_time
+                key_start_time=key_start_time, key_expiry_time=key_expiry_time
             )
             self._user_delegation_key_expiry = key_expiry_time
 
@@ -305,6 +307,9 @@ class AzureStorage(BaseStorage):
         if expire:
             expiry = self._expire_at(expire)
             user_delegation_key = self.get_user_delegation_key(expiry)
+            # aap.1: a SAS without a start time is valid from "now" on Azure's clock; backdate
+            # it one minute so a client clock slightly ahead of Azure's does not get 403s.
+            start_time = datetime.utcnow() - timedelta(minutes=1)
             sas_token = generate_blob_sas(
                 self.account_name,
                 self.azure_container,
@@ -313,6 +318,7 @@ class AzureStorage(BaseStorage):
                 user_delegation_key=user_delegation_key,
                 permission=permission,
                 expiry=expiry,
+                start=start_time,
                 **params,
             )
             credential = sas_token
